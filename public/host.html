@@ -1,183 +1,68 @@
-<!doctype html>
+<!DOCTYPE html>
 <html>
 <head>
-  <meta charset="utf-8" />
-  <title>Host Control</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta charset="UTF-8">
+  <title>Guest View</title>
   <style>
-    body{font-family:Arial;padding:12px}
-    #lobby{border:1px solid #ddd;padding:10px;margin-bottom:8px}
-    button{margin-right:6px;padding:8px}
-    video{width:320px;height:180px;background:#000;display:block;margin-bottom:8px}
-    input[type=text]{padding:8px;width:60%}
+    body { font-family: sans-serif; background: #111; color: white; text-align: center; }
+    video { width: 45%; margin: 10px; background: black; }
   </style>
 </head>
 <body>
-  <h2>Host Control</h2>
-  <div>
-    Room: <span id="roomId">-</span>
-    <button id="createRoom">Create Room</button>
-  </div>
+  <h1>Guest</h1>
+  <video id="localVideo" autoplay playsinline muted></video>
+  <video id="remoteVideo" autoplay playsinline></video>
 
-  <h3>Lobby</h3>
-  <div id="lobby">No guests yet</div>
-
-  <h3>Guest preview (Host receives here)</h3>
-  <video id="guestPreview" autoplay playsinline></video>
-  <div>
-    <button id="muteGuest" disabled>Mute Guest</button>
-    <button id="kickGuest" disabled>Kick Guest</button>
-    <button id="startForward" disabled>Start Forward to Viewer (OBS)</button>
-  </div>
-
-  <h3>OBS Viewer</h3>
-  <div>
-    <input id="overlayText" type="text" placeholder="Overlay text (name/topic)" />
-    <button id="setOverlay" disabled>Set Overlay</button>
-  </div>
   <script src="/socket.io/socket.io.js"></script>
   <script>
     const socket = io();
-    const createBtn = document.getElementById('createRoom');
-    const roomEl = document.getElementById('roomId');
-    const lobbyEl = document.getElementById('lobby');
-    const guestPreview = document.getElementById('guestPreview');
-    const muteBtn = document.getElementById('muteGuest');
-    const kickBtn = document.getElementById('kickGuest');
-    const startForwardBtn = document.getElementById('startForward');
-    const overlayInput = document.getElementById('overlayText');
-    const setOverlayBtn = document.getElementById('setOverlay');
+    const localVideo = document.getElementById('localVideo');
+    const remoteVideo = document.getElementById('remoteVideo');
+    let localStream;
+    let pc;
 
-    let room = null;
-    let hostPc = null; // receives from guest
-    let forwardPc = null; // sends to viewer
-    let currentGuestId = null;
-    let currentViewerId = null;
-    let guestStream = null;
-
-    createBtn.onclick = () => {
-      socket.emit('create-room', (res) => {
-        room = res.room;
-        roomEl.innerText = room;
-        // join as host
-        socket.emit('join', { role:'host', room, name:'Host' }, () => {});
-      });
-    };
-
-    socket.on('lobby-list', (list) => {
-      if (!list || list.length===0) { lobbyEl.innerHTML = 'No guests'; return; }
-      lobbyEl.innerHTML = '';
-      list.forEach(g => {
-        const div = document.createElement('div');
-        div.innerHTML = `${g.name} — <button data-id="${g.id}" class="accept">Accept</button> <button data-id="${g.id}" class="reject">Reject</button>`;
-        lobbyEl.appendChild(div);
-      });
-      // add handlers
-      [...document.querySelectorAll('.accept')].forEach(b=> b.onclick = ()=> {
-        const id = b.getAttribute('data-id');
-        socket.emit('host-accept-guest', { room, guestId:id });
-      });
-      [...document.querySelectorAll('.reject')].forEach(b=> b.onclick = ()=> {
-        const id = b.getAttribute('data-id');
-        socket.emit('host-reject-guest', { room, guestId:id });
-      });
-    });
-
-    // guest accepted — host should expect offer from guest
-    socket.on('guest-accepted', ({ guestId }) => {
-      currentGuestId = guestId;
-      prepareHostPeer();
-    });
-
-    socket.on('signal', async ({ from, type, data }) => {
-      if (from === currentGuestId) {
-        if (!hostPc) prepareHostPeer();
-        if (type === 'offer') {
-          await hostPc.setRemoteDescription(new RTCSessionDescription(data));
-          const answer = await hostPc.createAnswer();
-          await hostPc.setLocalDescription(answer);
-          socket.emit('signal', { to: from, type:'answer', data: answer });
-        } else if (type === 'ice') {
-          try{ await hostPc.addIceCandidate(new RTCIceCandidate(data)); }catch(e){}
-        }
-      } else if (from === currentViewerId) {
-        // viewer replies to host's offer for forwarding
-        if (type === 'answer' && forwardPc) {
-          await forwardPc.setRemoteDescription(new RTCSessionDescription(data));
-        } else if (type === 'ice' && forwardPc) {
-          try{ await forwardPc.addIceCandidate(new RTCIceCandidate(data)); }catch(e){}
-        }
+    async function startCamera() {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        localVideo.srcObject = localStream;
+        initConnection();
+      } catch (err) {
+        console.error('Camera error:', err);
       }
-    });
+    }
 
-    function prepareHostPeer(){
-      hostPc = new RTCPeerConnection({ iceServers:[{ urls:'stun:stun.l.google.com:19302' }] });
-      hostPc.ontrack = (e) => {
-        guestPreview.srcObject = e.streams[0];
-        guestStream = e.streams[0];
-        // enable control buttons
-        muteBtn.disabled = false; kickBtn.disabled = false; startForwardBtn.disabled = false; setOverlayBtn.disabled = false;
+    function initConnection() {
+      pc = new RTCPeerConnection();
+      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+      pc.ontrack = (event) => {
+        remoteVideo.srcObject = event.streams[0];
       };
-      hostPc.onicecandidate = (e) => {
-        if (e.candidate && currentGuestId) {
-          socket.emit('signal', { to: currentGuestId, type:'ice', data: e.candidate });
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          socket.emit('candidate', event.candidate);
         }
       };
     }
 
-    // when host starts forward, host will create offer to viewer
-    startForwardBtn.onclick = () => {
-      socket.emit('host-command', { room, cmd: 'start-forward' });
-    };
+    socket.on('offer', async (offer) => {
+      if (!pc) initConnection();
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      socket.emit('answer', answer);
+    });
 
-    // viewer-ready triggers host to create offer to viewer (viewer sends prepare-viewer then host will create)
-    socket.on('viewer-ready', ({ viewerId }) => {
-      currentViewerId = viewerId;
-      // prepare forward pc: add guest tracks to forwardPc and create offer to viewer
-      forwardPc = new RTCPeerConnection({ iceServers:[{ urls:'stun:stun.l.google.com:19302' }] });
-      forwardPc.onicecandidate = (e) => {
-        if (e.candidate && currentViewerId) {
-          socket.emit('signal', { to: currentViewerId, type:'ice', data: e.candidate });
-        }
-      };
-      // add guest tracks (if available)
-      if (guestStream) {
-        guestStream.getTracks().forEach(t => forwardPc.addTrack(t, guestStream));
+    socket.on('candidate', async (candidate) => {
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (err) {
+        console.error('ICE error:', err);
       }
-      // create offer for viewer
-      forwardPc.createOffer().then(offer => {
-        return forwardPc.setLocalDescription(offer).then(()=> {
-          socket.emit('signal', { to: currentViewerId, type:'offer', data: forwardPc.localDescription });
-        });
-      });
     });
 
-    // When host receives 'prepare-viewer' (server tells viewer to be ready), viewer will reply with signal events that are handled above.
-
-    muteBtn.onclick = ()=> {
-      if (!currentGuestId) return;
-      socket.emit('host-command', { room, cmd: 'mute', target: currentGuestId, payload: { what:'audio' } });
-    };
-    kickBtn.onclick = ()=> {
-      if (!currentGuestId) return;
-      socket.emit('host-command', { room, cmd: 'kick', target: currentGuestId, payload: { reason:'Removed by host' } });
-      // reset UI
-      guestPreview.srcObject = null; currentGuestId = null;
-    };
-
-    setOverlayBtn.onclick = ()=> {
-      const text = overlayInput.value || '';
-      socket.emit('host-command', { room, cmd: 'overlay', payload: { text } });
-    };
-
-    // when viewer page requests preparation for offer, server will instruct host via start-forward flow.
-    socket.on('prepare-viewer', ({ viewerId }) => {
-      // server informs host viewer is present -> we will create forward pc in viewer-ready handler
-    });
-
-    // viewer left/here
-    socket.on('viewer-left', ()=> { currentViewerId = null; if(forwardPc){forwardPc.close(); forwardPc=null;} });
-
+    startCamera();
   </script>
 </body>
 </html>
