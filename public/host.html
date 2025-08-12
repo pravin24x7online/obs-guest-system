@@ -2,14 +2,14 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Guest View</title>
+  <title>Host View</title>
   <style>
     body { font-family: sans-serif; background: #111; color: white; text-align: center; }
     video { width: 45%; margin: 10px; background: black; }
   </style>
 </head>
 <body>
-  <h1>Guest</h1>
+  <h1>Host</h1>
   <video id="localVideo" autoplay playsinline muted></video>
   <video id="remoteVideo" autoplay playsinline></video>
 
@@ -26,6 +26,7 @@
         localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         localVideo.srcObject = localStream;
         initConnection();
+        makeOffer();
       } catch (err) {
         console.error('Camera error:', err);
       }
@@ -46,12 +47,14 @@
       };
     }
 
-    socket.on('offer', async (offer) => {
-      if (!pc) initConnection();
-      await pc.setRemoteDescription(new RTCSessionDescription(offer));
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      socket.emit('answer', answer);
+    async function makeOffer() {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      socket.emit('offer', offer);
+    }
+
+    socket.on('answer', async (answer) => {
+      await pc.setRemoteDescription(new RTCSessionDescription(answer));
     });
 
     socket.on('candidate', async (candidate) => {
