@@ -6,10 +6,19 @@
   <style>
     body { font-family: sans-serif; background: #111; color: white; text-align: center; }
     video { width: 45%; margin: 10px; background: black; }
+    button { padding: 10px 15px; margin: 10px; font-size: 16px; }
+    input { padding: 8px; font-size: 16px; margin: 10px; }
   </style>
 </head>
 <body>
   <h1>Host</h1>
+  <div>
+    <input type="text" id="hostName" placeholder="Enter your name">
+    <button onclick="startCamera()">Start Interview</button>
+    <button onclick="muteGuest()">Mute Guest Mic</button>
+    <button onclick="unmuteGuest()">Unmute Guest Mic</button>
+  </div>
+  
   <video id="localVideo" autoplay playsinline muted></video>
   <video id="remoteVideo" autoplay playsinline></video>
 
@@ -18,15 +27,18 @@
     const socket = io();
     const localVideo = document.getElementById('localVideo');
     const remoteVideo = document.getElementById('remoteVideo');
-    let localStream;
-    let pc;
+    let localStream, pc, hostName;
 
     async function startCamera() {
+      hostName = document.getElementById('hostName').value.trim();
+      if (!hostName) return alert("Please enter your name");
+
       try {
         localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         localVideo.srcObject = localStream;
         initConnection();
         makeOffer();
+        socket.emit("host-name", hostName);
       } catch (err) {
         console.error('Camera error:', err);
       }
@@ -65,7 +77,12 @@
       }
     });
 
-    startCamera();
+    function muteGuest() {
+      socket.emit("control-mic", { mute: true });
+    }
+    function unmuteGuest() {
+      socket.emit("control-mic", { mute: false });
+    }
   </script>
 </body>
 </html>
