@@ -1,0 +1,60 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Viewer (OBS)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>html,body{margin:0;height:100%;background:#000}#wrap{position:relative;width:100%;height:100%}video{width:100%;height:100%;object-fit:cover}#overlay{position:absolute;left:10px;top:10px;color:#fff;font-size:28px;text-shadow:0 1px 5px rgba(0,0,0,0.7)}</style>
+</head>
+<body>
+  <div id="wrap">
+    <video id="remote" autoplay playsinline></video>
+    <div id="overlay"></div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+    const urlParts = location.pathname.split('/');
+    let room = urlParts.includes('room') ? urlParts[urlParts.indexOf('room')+1] : (new URL(location)).searchParams.get('room') || 'default';
+    const remote = document.getElementById('remote');
+    const overlay = document.getElementById('overlay');
+    let viewerPc = null;
+    let hostId = null;
+
+    socket.emit('join', { role:'viewer', room, name:'Viewer' }, ()=> {});
+
+    socket.on('prepare-viewer', ({ room: rm, hostId: h }) => {
+      hostId = h;
+      // viewer expects an offer from host; but in our flow host will create offer and send via signaling
+    });
+
+    socket.on('signal', async ({ from, type, data })=>{
+      try {
+        if (!viewerPc) {
+          viewerPc = new RTCPeerConnection({ iceServers:[{ urls:'stun:stun.l.google.com:19302' }] });
+          viewerPc.ontrack = (e)=> { remote.srcObject = e.streams[0]; };
+          viewerPc.onicecandidate = (e)=> { if(e.candidate && from) socket.emit('signal', { to: from, type:'ice', data: e.candidate }); };
+        }
+        if (type === 'offer') {
+          await viewerPc.setRemoteDescription(new RTCSessionDescription(data));
+          const ans = await viewerPc.createAnswer();
+          await viewerPc.setLocalDescription(ans);
+          socket.emit('signal', { to: from, type:'answer', data: ans });
+        } else if (type === 'ice') {
+          await viewerPc.addIceCandidate(new RTCIceCandidate(data));
+        } else if (type === 'answer') {
+          await viewerPc.setRemoteDescription(new RTCSessionDescription(data));
+        }
+      } catch (e) { console.error(e); }
+    });
+
+    socket.on('overlay', ({ text }) => {
+      overlay.innerText = text || '';
+    });
+
+    socket.on('host-left', () => { remote.srcObject=null; overlay.innerText=''; });
+
+  </script>
+</body>
+</html>
